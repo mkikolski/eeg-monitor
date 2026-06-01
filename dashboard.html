@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EPOC X EEG Monitor</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0d0d0d;
+    color: #e0e0e0;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    min-height: 100vh;
+  }
+
+  #header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 9px 16px;
+    background: #141414;
+    border-bottom: 1px solid #222;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  #header h1 {
+    font-size: 12px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #888;
+  }
+
+  #status {
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding: 3px 12px;
+    border-radius: 20px;
+    background: #2a0000;
+    color: #f55;
+    transition: background 0.4s, color 0.4s;
+  }
+  #status.connected { background: #002a00; color: #5f5; }
+
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    padding: 8px;
+  }
+
+  .ch-card {
+    background: #111;
+    border: 1px solid #1e1e1e;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .ch-label {
+    font-size: 10px;
+    color: #666;
+    padding: 2px 6px;
+    background: #0d0d0d;
+    border-bottom: 1px solid #1a1a1a;
+    letter-spacing: 1px;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 60px;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>EPOC X &mdash; EEG Monitor</h1>
+  <div id="status">WAITING FOR DEVICE</div>
+</div>
+<div id="grid"></div>
+
+<script>
+const WS_URL       = 'ws://localhost:2140';
+const BUFFER_SIZE  = 256;
+const N_CHANNELS   = 16;
+const RECONNECT_MS = 2000;
+
+const COLORS = [
+  '#4fc3f7', '#81c784', '#ffb74d', '#f06292',
+  '#ce93d8', '#80deea', '#a5d6a7', '#fff176',
+  '#ef9a9a', '#90caf9', '#ffcc02', '#69f0ae',
+  '#ff8a65', '#b39ddb', '#80cbc4', '#e6ee9c',
+];
+
+// Ring buffers — one Float32Array per channel
+const bufs  = Array.from({length: N_CHANNELS}, () => new Float32Array(BUFFER_SIZE));
+const heads = new Int32Array(N_CHANNELS);  // write-head per channel
+let chNames = Array.from({length: N_CHANNELS}, (_, i) => `CH${i}`);
+
+const labelEls = [];
+const canvases  = [];
+const ctxs      = [];
+
+// Build the channel grid
+const grid = document.getElementById('grid');
+for (let i = 0; i < N_CHANNELS; i++) {
+  const card = document.createElement('div');
+  card.className = 'ch-card';
+
+  const label = document.createElement('div');
+  label.className = 'ch-label';
+  label.textContent = chNames[i];
+  labelEls.push(label);
+
+  const cv = document.createElement('canvas');
+  cv.width  = 512;  // intrinsic size; CSS scales to container width
+  cv.height = 60;
+  canvases.push(cv);
+  ctxs.push(cv.getContext('2d'));
+
+  card.appendChild(label);
+  card.appendChild(cv);
+  grid.appendChild(card);
+}
+
+function drawChannel(i) {
+  const ctx  = ctxs[i];
+  const w    = canvases[i].width;
+  const h    = canvases[i].height;
+  const buf  = bufs[i];
+  const head = heads[i];
+
+  // Auto-scale: min/max over the visible window
+  let mn = Infinity, mx = -Infinity;
+  for (let j = 0; j < BUFFER_SIZE; j++) {
+    const v = buf[j];
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  if (mx <= mn) { mn -= 1; mx += 1; }
+  const rng = mx - mn;
+  const pad = 3;
+
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.beginPath();
+  ctx.strokeStyle = COLORS[i % COLORS.length];
+  ctx.lineWidth = 1.5;
+
+  // Draw oldest→newest left→right using the ring buffer
+  for (let j = 0; j < BUFFER_SIZE; j++) {
+    const idx = (head + j) % BUFFER_SIZE;
+    const x   = (j / (BUFFER_SIZE - 1)) * w;
+    const y   = h - pad - ((buf[idx] - mn) / rng) * (h - 2 * pad);
+    j === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function renderLoop() {
+  for (let i = 0; i < N_CHANNELS; i++) drawChannel(i);
+  requestAnimationFrame(renderLoop);
+}
+requestAnimationFrame(renderLoop);
+
+// WebSocket with auto-reconnect
+function connect() {
+  const statusEl = document.getElementById('status');
+  const ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    statusEl.textContent = 'CONNECTED';
+    statusEl.className = 'connected';
+  };
+
+  ws.onmessage = ({data}) => {
+    const msg = JSON.parse(data);
+
+    // Update channel labels on first message
+    if (msg.names) {
+      msg.names.forEach((n, i) => {
+        if (i < N_CHANNELS) labelEls[i].textContent = n;
+      });
+    }
+
+    // Push samples into ring buffers
+    msg.channels.forEach((v, i) => {
+      if (i < N_CHANNELS) {
+        bufs[i][heads[i]] = v;
+        heads[i] = (heads[i] + 1) % BUFFER_SIZE;
+      }
+    });
+  };
+
+  ws.onclose = () => {
+    statusEl.textContent = 'WAITING FOR DEVICE';
+    statusEl.className = '';
+    setTimeout(connect, RECONNECT_MS);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+connect();
+</script>
+</body>
+</html>

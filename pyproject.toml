@@ -1,0 +1,11 @@
+[project]
+name = "mockeeg"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "hid>=1.0.6",
+    "pycryptodome>=3.0",
+    "websockets>=14.0",
+    "loguru>=0.6",
+]
