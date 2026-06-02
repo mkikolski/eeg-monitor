@@ -43,7 +43,8 @@
     color: #f55;
     transition: background 0.4s, color 0.4s;
   }
-  #status.connected { background: #002a00; color: #5f5; }
+  #status.waiting  { background: #1a1a00; color: #cc0; }
+  #status.streaming { background: #002a00; color: #5f5; }
 
   #grid {
     display: grid;
@@ -86,7 +87,7 @@
 <script>
 const WS_URL       = 'ws://localhost:2140';
 const BUFFER_SIZE  = 256;
-const N_CHANNELS   = 16;
+const N_CHANNELS   = 14;
 const RECONNECT_MS = 2000;
 
 const COLORS = [
@@ -174,14 +175,25 @@ function connect() {
   const ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
-    statusEl.textContent = 'CONNECTED';
-    statusEl.className = 'connected';
+    statusEl.textContent = 'WAITING FOR DEVICE';
+    statusEl.className = 'waiting';
   };
 
   ws.onmessage = ({data}) => {
     const msg = JSON.parse(data);
 
-    // Update channel labels on first message
+    if (msg.event === 'device_connected') {
+      statusEl.textContent = 'STREAMING';
+      statusEl.className = 'streaming';
+      return;
+    }
+    if (msg.event === 'device_disconnected') {
+      statusEl.textContent = 'WAITING FOR DEVICE';
+      statusEl.className = 'waiting';
+      return;
+    }
+
+    // Update channel labels on first data message
     if (msg.names) {
       msg.names.forEach((n, i) => {
         if (i < N_CHANNELS) labelEls[i].textContent = n;
@@ -198,7 +210,7 @@ function connect() {
   };
 
   ws.onclose = () => {
-    statusEl.textContent = 'WAITING FOR DEVICE';
+    statusEl.textContent = 'RECONNECTING…';
     statusEl.className = '';
     setTimeout(connect, RECONNECT_MS);
   };

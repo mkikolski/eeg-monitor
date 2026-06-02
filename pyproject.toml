@@ -8,4 +8,5 @@ dependencies = [
     "pycryptodome>=3.0",
     "websockets>=14.0",
     "loguru>=0.6",
+    "bleak>=3.0.2",
 ]
