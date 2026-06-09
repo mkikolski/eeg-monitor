@@ -9,4 +9,5 @@ dependencies = [
     "websockets>=14.0",
     "loguru>=0.6",
     "bleak>=3.0.2",
+    "pyarrow>=24.0.0",
 ]
