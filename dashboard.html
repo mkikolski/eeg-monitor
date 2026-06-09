@@ -46,6 +46,31 @@
   #status.waiting  { background: #1a1a00; color: #cc0; }
   #status.streaming { background: #002a00; color: #5f5; }
 
+  #rec-btn {
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding: 3px 14px;
+    border-radius: 20px;
+    border: none;
+    cursor: pointer;
+    background: #1a1a1a;
+    color: #666;
+    transition: background 0.2s, color 0.2s;
+    margin-left: auto;
+  }
+  #rec-btn.armed   { background: #3a0000; color: #f55; }
+  #rec-btn.recording { background: #f55; color: #000; animation: blink 1s step-start infinite; }
+  @keyframes blink { 50% { opacity: 0.5; } }
+
+  #rec-counter {
+    font-size: 10px;
+    color: #555;
+    min-width: 60px;
+    text-align: right;
+  }
+
   #grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -81,6 +106,8 @@
 <div id="header">
   <h1>EPOC X &mdash; EEG Monitor</h1>
   <div id="status">WAITING FOR DEVICE</div>
+  <button id="rec-btn">REC</button>
+  <span id="rec-counter"></span>
 </div>
 <div id="grid"></div>
 
@@ -169,6 +196,47 @@ function renderLoop() {
 }
 requestAnimationFrame(renderLoop);
 
+// Recording
+let recording   = false;
+let recRows     = [];   // [{t, channels}]
+let recStart    = 0;
+let recNames    = [];
+let frameCount  = 0;
+
+const recBtn     = document.getElementById('rec-btn');
+const recCounter = document.getElementById('rec-counter');
+
+recBtn.addEventListener('click', () => {
+  if (!recording) {
+    recRows   = [];
+    recStart  = performance.now();
+    frameCount = 0;
+    recording = true;
+    recBtn.textContent = 'STOP';
+    recBtn.className   = 'recording';
+  } else {
+    recording = false;
+    recBtn.textContent = 'REC';
+    recBtn.className   = '';
+    recCounter.textContent = '';
+    if (recRows.length > 0) saveCSV();
+  }
+});
+
+function saveCSV() {
+  const names = recNames.length ? recNames : Array.from({length: N_CHANNELS}, (_, i) => `CH${i}`);
+  const header = ['timestamp_ms', ...names].join(',');
+  const lines  = recRows.map(r => [r.t.toFixed(1), ...r.ch.map(v => v.toFixed(6))].join(','));
+  const blob   = new Blob([[header, ...lines].join('\n')], {type: 'text/csv'});
+  const url    = URL.createObjectURL(blob);
+  const a      = document.createElement('a');
+  const ts     = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.href       = url;
+  a.download   = `eeg_${ts}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // WebSocket with auto-reconnect
 function connect() {
   const statusEl = document.getElementById('status');
@@ -195,6 +263,7 @@ function connect() {
 
     // Update channel labels on first data message
     if (msg.names) {
+      recNames = msg.names;
       msg.names.forEach((n, i) => {
         if (i < N_CHANNELS) labelEls[i].textContent = n;
       });
@@ -207,6 +276,16 @@ function connect() {
         heads[i] = (heads[i] + 1) % BUFFER_SIZE;
       }
     });
+
+    // Record
+    if (recording) {
+      recRows.push({t: performance.now() - recStart, ch: msg.channels.slice(0, N_CHANNELS)});
+      frameCount++;
+      if (frameCount % 32 === 0) {
+        const secs = ((performance.now() - recStart) / 1000).toFixed(1);
+        recCounter.textContent = `${secs}s / ${frameCount}f`;
+      }
+    }
   };
 
   ws.onclose = () => {

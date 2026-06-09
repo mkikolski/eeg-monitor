@@ -394,9 +394,11 @@ async def main() -> None:
     logger.info("Dashboard  →  http://localhost:{}", HTTP_PORT)
     logger.info("WebSocket  →  ws://localhost:{}", WS_PORT)
 
+    from mem_reader import mem_reader
+
     async with websockets.serve(ws_handler, "0.0.0.0", WS_PORT):
         await asyncio.gather(
-            ble_reader(data_queue := asyncio.Queue()),
+            mem_reader(data_queue := asyncio.Queue()),
             broadcast_loop(data_queue),
         )
 
