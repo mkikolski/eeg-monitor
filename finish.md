@@ -15,34 +15,46 @@
 - EmotivPRO also stores baseline-corrected versions of the same channels nearby in memory (±50 µV range) — ignore those
 
 ### Buffer layout
-- Buffer base (runtime, changes every restart): `0x187AA63E0A0`
-- Each channel has a **ping-pong (2-slot) buffer** — two adjacent doubles, 8 bytes apart, alternating as write/read
-- We read from the first slot of each pair (lower address)
-- 14 channel offsets from buffer base (confirmed by brute_scan while headset worn):
+- Buffer base (runtime, changes every restart): `0x1F9575C6E00` (last confirmed session)
+- 14 channels are **packed as consecutive float64s**, 8 bytes apart, spanning only 0x68 (104) bytes
+- Confirmed by `find_and_map_live_channels()` two-snapshot whole-process heap scan:
 
 ```
 CHANNEL_OFFSETS = [
-    0x0000, 0x0240, 0x0260, 0x0500, 0x0600,
-    0x07C0, 0x0900, 0x09C0, 0x09E0, 0x0A00,
-    0x0AA0, 0x0CE0, 0x0D80, 0x0EE0,
+    0x00, 0x08, 0x10, 0x18, 0x20, 0x28,
+    0x30, 0x38, 0x40, 0x48, 0x50, 0x58,
+    0x60, 0x68,
 ]
 ```
+
+- The old offsets (spanning 0x0EE0 = 3808 bytes) were wrong — they came from `brute_scan()` which found unrelated EEG-range values across a large struct, not a real 14-channel array
+- The heap scan found 4638 EEG-range doubles in the process (many ring-buffer / processing-queue copies); the tightest-14-cluster heuristic correctly selects the primary write buffer
 
 ### Pointer chain (static — survives process restart IF it works)
 Found via Cheat Engine pointer scanner on address `0x187AA63E0A0`:
 
 ```
-EmotivPRO.exe + 0x02AB4268  →  +0x380  →  +0x70  →  +0x70  →  +0xFC0
+EmotivPRO.exe + 0x02AB4268  →  +0xFC0  →  +0x70  →  +0x70  →  +0x380
 ```
+
+**NOTE:** CE pointer scanner sqlite export lists offsets in base→target order (offset1 is first
+dereference, offset4 is the final add). CE's GUI displays them target→base (reversed), which
+is what tripped us up in the first session — [0x380, 0x70, 0x70, 0xFC0] was the GUI order,
+[0xFC0, 0x70, 0x70, 0x380] is the correct application order.
 
 Resolution in Python (already in mem_reader.py):
 ```python
 mod  = pymem.process.module_from_name(pm.process_handle, "EmotivPRO.exe")
 addr = pm.read_ulonglong(mod.lpBaseOfDll + 0x02AB4268)
-addr = pm.read_ulonglong(addr + 0x380)
+addr = pm.read_ulonglong(addr + 0xFC0)
 addr = pm.read_ulonglong(addr + 0x70)
 addr = pm.read_ulonglong(addr + 0x70)
-buf_base = addr + 0xFC0   # should equal ~0x187AA63E0A0 (differs each session)
+buf_base = addr + 0x380   # runtime address, differs each session
+```
+
+Backup chain (also from sqlite row 26, same BASE_OFF):
+```
+EmotivPRO.exe + 0x02AB4268  →  +0xF60  →  +0x90  →  +0x70  →  +0x380
 ```
 
 ---
@@ -59,10 +71,10 @@ import pymem, pymem.process, struct
 pm = pymem.Pymem('EmotivPRO.exe')
 mod = pymem.process.module_from_name(pm.process_handle, 'EmotivPRO.exe')
 addr = pm.read_ulonglong(mod.lpBaseOfDll + 0x02AB4268)
-addr = pm.read_ulonglong(addr + 0x380)
+addr = pm.read_ulonglong(addr + 0xFC0)
 addr = pm.read_ulonglong(addr + 0x70)
 addr = pm.read_ulonglong(addr + 0x70)
-addr = addr + 0xFC0
+addr = addr + 0x380
 v = struct.unpack('<d', pm.read_bytes(addr, 8))[0]
 print(f'buf_base=0x{addr:X}  ch0={v:.2f}')
 "
